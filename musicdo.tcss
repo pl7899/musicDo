@@ -1,0 +1,135 @@
+Screen {
+    background: #1C1C1E;
+    color: #F5F5F5;
+    layers: base floating;
+}
+
+Header, Footer {
+    background: #2C2C2E;
+    color: #8E8E93;
+}
+
+#main {
+    height: 1fr;
+}
+
+#status {
+    color: #5E8B87;
+    text-style: bold;
+    height: 1;
+    padding: 0 2;
+}
+
+/* ---- Top row: now playing (left) + queue (right) ---- */
+
+#top_row {
+    height: 14;
+    border-bottom: solid #3A3A3C;
+}
+
+#now_playing {
+    width: 1fr;
+    height: 1fr;
+    padding: 0 2;
+    border-right: solid #3A3A3C;
+}
+
+#track {
+    /* markup: bold #E1D4C0 */
+}
+
+#sub {
+    /* markup: dim */
+}
+
+.vspace {
+    height: 1fr;
+}
+
+#progress_bar {
+}
+
+#state_vol_row {
+    height: 1;
+}
+
+#pb_state {
+    width: 1fr;
+}
+
+#vol {
+    width: auto;
+    text-align: right;
+}
+
+#queue_panel {
+    width: 1fr;
+    height: 1fr;
+    padding: 1 2;
+}
+
+#queue_header {
+    margin-bottom: 1;
+}
+
+/* ---- Browse area (lower half, always visible) ---- */
+
+#browse_area {
+    height: 1fr;
+}
+
+#browse_tabs {
+    height: 1;
+    padding: 0 2;
+    border-top: solid #3A3A3C;
+    border-bottom: solid #3A3A3C;
+}
+
+#browse_panel {
+    height: 1fr;
+    padding: 0 2;
+}
+
+#browse_results {
+    height: 1fr;
+    background: #1C1C1E;
+    border: none transparent;
+}
+
+#browse_results > ListItem {
+    background: #1C1C1E;
+    padding: 0 1;
+}
+
+#browse_results > ListItem.--highlight {
+    background: #3A3A3C;
+}
+
+/* ---- Search (replaces browse area when active) ---- */
+
+#search_panel {
+    height: 1fr;
+    padding: 1 2;
+}
+
+#search_input {
+    background: #2C2C2E;
+    border: solid #5E8B87;
+    color: #F5F5F5;
+    margin-bottom: 1;
+}
+
+#search_results {
+    height: 1fr;
+    background: #1C1C1E;
+    border: none transparent;
+}
+
+#search_results > ListItem {
+    background: #1C1C1E;
+    padding: 0 1;
+}
+
+#search_results > ListItem.--highlight {
+    background: #3A3A3C;
+}
