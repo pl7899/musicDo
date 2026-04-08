@@ -36,10 +36,10 @@ _PLAYBACK_STATE = {
 
 # Browse sources: key → (label, API path, extra fetch params)
 _BROWSE_SOURCES = {
-    "1": ("Recent",    "/v1/me/recent/played",           {}),
-    "2": ("Heavy",     "/v1/me/history/heavy-rotation",  {}),
-    "3": ("Library",   "/v1/me/library/albums",          {"sort": "-dateAdded"}),
-    "4": ("Mixes",     "/v1/me/recommendations",         {}),
+    "1": ("Added",    "/v1/me/library/recently-added",  {}),
+    "2": ("Related",  "",                               {}),  # dynamic — built from current artist
+    "3": ("Library",  "/v1/me/library/albums",          {"sort": "-dateAdded"}),
+    "4": ("Mixes",    "/v1/me/recommendations",         {}),
 }
 
 # Single JS call that returns everything needed to update the display.
@@ -107,13 +107,13 @@ def _build_search_js(term: str) -> str:
     """
 
 
-def _build_browse_js(source_key: str) -> str:
+def _build_browse_js(source_key: str, artist: str = "") -> str:
     """Build JS to fetch browse items for the given source key (1–4)."""
-    if source_key == "1":          # Recent played — albums, playlists, songs
+    if source_key == "1":          # Recently added to library
         return """
         (async function() {
             const mk = MusicKit.getInstance();
-            const res = await mk.api.music('/v1/me/recent/played', {limit: 25});
+            const res = await mk.api.music('/v1/me/library/recently-added', {limit: 25});
             return (res.data && res.data.data || [])
                 .filter(i => i.attributes && i.attributes.playParams)
                 .map(i => ({
@@ -125,21 +125,26 @@ def _build_browse_js(source_key: str) -> str:
                 }));
         })()
         """
-    elif source_key == "2":        # Heavy rotation — albums, playlists, stations
-        return """
-        (async function() {
+    elif source_key == "2":        # Related — catalog albums by current artist
+        safe = artist.replace("\\", "\\\\").replace("`", "\\`").replace("'", "\\'")
+        return f"""
+        (async function() {{
             const mk = MusicKit.getInstance();
-            const res = await mk.api.music('/v1/me/history/heavy-rotation', {limit: 25});
-            return (res.data && res.data.data || [])
+            const sf = mk.storefrontId || 'us';
+            const res = await mk.api.music(`/v1/catalog/${{sf}}/search`, {{
+                term: '{safe}', types: 'albums', limit: 25
+            }});
+            const r = (res.data && res.data.results) || {{}};
+            return (r.albums && r.albums.data || [])
                 .filter(i => i.attributes && i.attributes.playParams)
-                .map(i => ({
+                .map(i => ({{
                     id:     i.attributes.playParams.id,
                     kind:   i.attributes.playParams.kind,
                     title:  i.attributes.name,
-                    artist: i.attributes.artistName || i.attributes.curatorName || '',
+                    artist: i.attributes.artistName || '',
                     extra:  i.attributes.trackCount ? i.attributes.trackCount + ' tracks' : '',
-                }));
-        })()
+                }}));
+        }})()
         """
     elif source_key == "3":        # Library albums sorted by date added
         return """
@@ -242,14 +247,18 @@ def _volume_bar(volume: float, width: int = 10) -> str:
     return "█" * filled + "░" * (width - filled)
 
 
-def _browse_tab_line(active: str) -> str:
+def _browse_tab_line(active: str, related_artist: str = "") -> str:
     """Render the source-selector tab line, highlighting the active source."""
     parts = []
     for key, (label, _, _) in _BROWSE_SOURCES.items():
+        display = label
+        if key == "2" and related_artist:
+            short = related_artist[:20] + "…" if len(related_artist) > 20 else related_artist
+            display = f"Related: {short}"
         if key == active:
-            parts.append(f"[bold #6FA7A2]{key} {label}[/bold #6FA7A2]")
+            parts.append(f"[bold #C4622D]{key} {display}[/bold #C4622D]")
         else:
-            parts.append(f"[dim]{key} {label}[/dim]")
+            parts.append(f"[dim]{key} {display}[/dim]")
     return "  ".join(parts)
 
 
@@ -292,7 +301,7 @@ class MusicDoApp(App):
 
                 with Vertical(id="queue_panel"):
                     yield Static(
-                        "[bold #6FA7A2]Queue[/bold #6FA7A2]",
+                        "[bold #C9A84C]Queue[/bold #C9A84C]",
                         id="queue_header", markup=True,
                     )
                     yield Static("", id="queue_list", markup=True)
@@ -308,12 +317,13 @@ class MusicDoApp(App):
         yield Footer()
 
     async def on_mount(self) -> None:
-        self._ws            = None
-        self._msg_id        = 0
-        self._lock          = asyncio.Lock()
-        self._browse_source = "1"
-        self._search_mode   = False
+        self._ws             = None
+        self._msg_id         = 0
+        self._lock           = asyncio.Lock()
+        self._browse_source  = "1"
+        self._search_mode    = False
         self._browse_cache: dict[str, list] = {}
+        self._current_artist = ""
 
         self.query_one("#search_panel").display = False
         self.query_one("#search_input", Input).disabled = True
@@ -379,14 +389,14 @@ class MusicDoApp(App):
         time_str = f"{_fmt_time(current)} / {_fmt_time(duration)}"
         vol_bar  = _volume_bar(volume)
 
-        self.query_one("#track",        Static).update(f"[bold #E1D4C0]{title}[/bold #E1D4C0]")
+        self.query_one("#track",        Static).update(f"[bold #EDD9A3]{title}[/bold #EDD9A3]")
         self.query_one("#sub",          Static).update(f"[dim]{artist}  ·  {album}[/dim]")
         self.query_one("#progress_bar", Static).update(
-            f"[#5E8B87]{bar}[/#5E8B87]  [dim]{time_str}[/dim]"
+            f"[#C9A84C]{bar}[/#C9A84C]  [dim]{time_str}[/dim]"
         )
-        self.query_one("#pb_state", Static).update(f"[#C4AA82]{pb_state}[/#C4AA82]")
+        self.query_one("#pb_state", Static).update(f"[#D4882A]{pb_state}[/#D4882A]")
         self.query_one("#vol",      Static).update(
-            f"[dim]vol[/dim]  [#5E8B87]{vol_bar}[/#5E8B87]  [dim]{int(volume * 100)}%[/dim]"
+            f"[dim]vol[/dim]  [#7A9E58]{vol_bar}[/#7A9E58]  [dim]{int(volume * 100)}%[/dim]"
         )
 
         queue = state.get("queue", [])
@@ -395,12 +405,20 @@ class MusicDoApp(App):
             for i, item in enumerate(queue):
                 t      = item.get("title",  "—")
                 a      = item.get("artist", "")
-                marker = "[#6FA7A2]▸[/#6FA7A2]" if i == 0 else " "
-                a_part = f"  [dim #7A6E64]{a}[/dim #7A6E64]" if a else ""
+                marker = "[#C9A84C]▸[/#C9A84C]" if i == 0 else " "
+                a_part = f"  [dim #8A7355]{a}[/dim #8A7355]" if a else ""
                 lines.append(f"{marker} [dim]{t}[/dim]{a_part}")
             self.query_one("#queue_list", Static).update("\n".join(lines))
         else:
             self.query_one("#queue_list", Static).update("[dim](queue empty)[/dim]")
+
+        # Invalidate the Related cache when the artist changes
+        new_artist = artist  # already extracted above
+        if new_artist and new_artist != "—" and new_artist != self._current_artist:
+            self._current_artist = new_artist
+            self._browse_cache.pop("2", None)
+            if self._browse_source == "2":
+                asyncio.create_task(self._load_browse("2"))
 
     def _set_status(self, msg: str) -> None:
         self.query_one("#status", Static).update(msg)
@@ -478,18 +496,31 @@ class MusicDoApp(App):
         self._browse_source = source_key
         label = _BROWSE_SOURCES[source_key][0]
 
-        self.query_one("#browse_tabs", Static).update(_browse_tab_line(source_key))
+        self.query_one("#browse_tabs", Static).update(
+            _browse_tab_line(source_key, self._current_artist)
+        )
 
         if source_key in self._browse_cache:
             self._populate_browse(self._browse_cache[source_key])
             return
 
+        if source_key == "2" and not self._current_artist:
+            lv = self.query_one("#browse_results", ListView)
+            lv.clear()
+            lv.append(ListItem(Label("[dim]Nothing playing yet[/dim]", markup=True)))
+            return
+
         lv = self.query_one("#browse_results", ListView)
         lv.clear()
-        lv.append(ListItem(Label(f"[dim]loading {label}...[/dim]", markup=True)))
+        loading_label = f"loading {label}..." if source_key != "2" \
+            else f"loading related: {self._current_artist}..."
+        lv.append(ListItem(Label(f"[dim]{loading_label}[/dim]", markup=True)))
 
-        self._set_status(f"loading {label}...")
-        results = await self._js(_build_browse_js(source_key), await_promise=True)
+        self._set_status(loading_label)
+        results = await self._js(
+            _build_browse_js(source_key, self._current_artist),
+            await_promise=True,
+        )
         self._set_status("● connected")
 
         if not results:
@@ -508,9 +539,9 @@ class MusicDoApp(App):
             artist = item.get("artist", "")
             extra  = item.get("extra",  "")
             a_part = f"  [dim]{artist}[/dim]" if artist else ""
-            e_part = f"  [dim #7A6E64]{extra}[/dim #7A6E64]" if extra else ""
+            e_part = f"  [dim #8A7355]{extra}[/dim #8A7355]" if extra else ""
             li = ListItem(Label(
-                f"[bold #E1D4C0]{title}[/bold #E1D4C0]{a_part}{e_part}",
+                f"[bold #EDD9A3]{title}[/bold #EDD9A3]{a_part}{e_part}",
                 markup=True,
             ))
             li._item_id   = item["id"]
@@ -564,11 +595,11 @@ class MusicDoApp(App):
             title  = item.get("title",  "—")
             artist = item.get("artist", "")
             extra  = item.get("extra",  "")
-            prefix = "[dim #5E8B87]album[/dim #5E8B87]" if kind == "album" \
-                else "[dim #7A6E64] song[/dim #7A6E64]"
+            prefix = "[dim #7A9E58]album[/dim #7A9E58]" if kind == "album" \
+                else "[dim #C4622D] song[/dim #C4622D]"
             e_part = f"  [dim]{extra}[/dim]" if extra else ""
             li = ListItem(Label(
-                f"{prefix}  [bold #E1D4C0]{title}[/bold #E1D4C0]"
+                f"{prefix}  [bold #EDD9A3]{title}[/bold #EDD9A3]"
                 f"  [dim]{artist}[/dim]{e_part}",
                 markup=True,
             ))
