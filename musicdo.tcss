@@ -23,7 +23,7 @@ Header, Footer {
 /* ---- Top row: now playing (left) + queue (right) ---- */
 
 #top_row {
-    height: 14;
+    height: 17;
     border-bottom: solid #4A3520;
 }
 

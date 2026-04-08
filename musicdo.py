@@ -49,10 +49,21 @@ _STATE_JS = """
     if (!mk) return null;
     const item = mk.nowPlayingItem;
     const queueItems = [];
+    const queuePos = (mk.queue && typeof mk.queue.position === 'number')
+        ? mk.queue.position : 0;
     try {
         const items = Array.from((mk.queue && mk.queue.items) || []);
-        for (let i = 0; i < Math.min(items.length, 10); i++) {
-            queueItems.push({title: items[i].title || '', artist: items[i].artistName || ''});
+        const windowSize = 13;
+        const tailPad    = 3;
+        const headLen    = windowSize - 1 - tailPad;  // 9: tracks before current before scrolling kicks in
+        const start = queuePos <= headLen ? 0 : queuePos - headLen;
+        const end   = Math.min(items.length, start + windowSize);
+        for (let i = start; i < end; i++) {
+            queueItems.push({
+                title:     items[i].title      || '',
+                artist:    items[i].artistName || '',
+                isCurrent: i === queuePos,
+            });
         }
     } catch(e) {}
     return {
@@ -402,10 +413,11 @@ class MusicDoApp(App):
         queue = state.get("queue", [])
         if queue:
             lines = []
-            for i, item in enumerate(queue):
-                t      = item.get("title",  "—")
-                a      = item.get("artist", "")
-                marker = "[#C9A84C]▸[/#C9A84C]" if i == 0 else " "
+            for item in queue:
+                t          = item.get("title",     "—")
+                a          = item.get("artist",    "")
+                is_current = item.get("isCurrent", False)
+                marker = "[#C9A84C]▸[/#C9A84C]" if is_current else " "
                 a_part = f"  [dim #8A7355]{a}[/dim #8A7355]" if a else ""
                 lines.append(f"{marker} [dim]{t}[/dim]{a_part}")
             self.query_one("#queue_list", Static).update("\n".join(lines))
