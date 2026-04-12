@@ -87,13 +87,13 @@ Header, Footer {
 
 #browse_panel {
     height: 1fr;
-    padding: 0 2;
 }
 
 #browse_results {
     height: 1fr;
     background: #1A1209;
     border: none transparent;
+    margin: 0 2;
 }
 
 #browse_results > ListItem {
@@ -101,15 +101,19 @@ Header, Footer {
     padding: 0 1;
 }
 
-#browse_results > ListItem.--highlight {
-    background: #3D2A12;
+#browse_results > ListItem.-highlight {
+    background: #5C3D18;
+}
+
+#browse_results > ListItem.-highlight Label {
+    color: #C9A84C;
 }
 
 /* ---- Search (replaces browse area when active) ---- */
 
 #search_panel {
     height: 1fr;
-    padding: 1 2;
+    padding: 0 2;
 }
 
 #search_input {
@@ -130,6 +134,10 @@ Header, Footer {
     padding: 0 1;
 }
 
-#search_results > ListItem.--highlight {
-    background: #3D2A12;
+#search_results > ListItem.-highlight {
+    background: #5C3D18;
+}
+
+#search_results > ListItem.-highlight Label {
+    color: #C9A84C;
 }

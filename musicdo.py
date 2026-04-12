@@ -1,18 +1,22 @@
 """
-musicdo.py — Terminal controller for Apple Music web player.
+musicdo.py — Terminal controller for Apple Music and YouTube.
 
-Uses Chrome DevTools Protocol (CDP) to drive music.apple.com running
-in a browser window. The browser handles auth and DRM; this app sends
-JavaScript commands and polls for state.
+Uses Chrome DevTools Protocol (CDP) to drive music.apple.com and
+youtube.com running in a browser window.
 
 Setup:
   pip install websockets textual
   brave-browser --remote-debugging-port=9222 https://music.apple.com
   Log in to Apple Music in that window, then:  python musicdo.py
+
+YouTube streams are defined in streams.json alongside this file.
+Select source 5 to browse and play them. Controls: space=play/pause, r=restart.
 """
 
 import asyncio
 import json
+import pathlib
+import urllib.parse
 import urllib.request
 
 import websockets
@@ -23,6 +27,8 @@ from textual.widgets import Footer, Header, Input, Label, ListItem, ListView, St
 
 
 CDP_HOST = "http://localhost:9222"
+
+_STREAMS_FILE = pathlib.Path(__file__).parent / "streams.json"
 
 _PLAYBACK_STATE = {
     0:  "—",
@@ -35,14 +41,20 @@ _PLAYBACK_STATE = {
 }
 
 # Browse sources: key → (label, API path, extra fetch params)
+# Source "5" is handled entirely in Python (no MusicKit JS call).
 _BROWSE_SOURCES = {
     "1": ("Added",    "/v1/me/library/recently-added",  {}),
-    "2": ("Related",  "",                               {}),  # dynamic — built from current artist
+    "2": ("Related",  "",                               {}),
     "3": ("Library",  "/v1/me/library/albums",          {"sort": "-dateAdded"}),
     "4": ("Mixes",    "/v1/me/recommendations",         {}),
+    "5": ("YouTube",  "",                               {}),
 }
 
-# Single JS call that returns everything needed to update the display.
+# ---------------------------
+# JavaScript templates
+# ---------------------------
+
+# Single JS call that returns everything needed to update the Apple Music display.
 _STATE_JS = """
 (function() {
     const mk = window.MusicKit && MusicKit.getInstance();
@@ -55,7 +67,7 @@ _STATE_JS = """
         const items = Array.from((mk.queue && mk.queue.items) || []);
         const windowSize = 13;
         const tailPad    = 3;
-        const headLen    = windowSize - 1 - tailPad;  // 9: tracks before current before scrolling kicks in
+        const headLen    = windowSize - 1 - tailPad;
         const start = queuePos <= headLen ? 0 : queuePos - headLen;
         const end   = Math.min(items.length, start + windowSize);
         for (let i = start; i < end; i++) {
@@ -79,6 +91,26 @@ _STATE_JS = """
 })()
 """
 
+# Polls the HTML5 video element on a YouTube page.
+_YT_STATE_JS = """
+(function() {
+    const video = document.querySelector('video');
+    if (!video) return null;
+    return {
+        title:       document.title.replace(/ - YouTube$/, ''),
+        paused:      video.paused,
+        currentTime: video.currentTime,
+        duration:    video.duration || 0,
+        ended:       video.ended,
+        volume:      video.volume,
+    };
+})()
+"""
+
+
+# ---------------------------
+# JS builders (Apple Music)
+# ---------------------------
 
 def _build_search_js(term: str) -> str:
     safe = term.replace("\\", "\\\\").replace("`", "\\`").replace("'", "\\'")
@@ -119,8 +151,8 @@ def _build_search_js(term: str) -> str:
 
 
 def _build_browse_js(source_key: str, artist: str = "") -> str:
-    """Build JS to fetch browse items for the given source key (1–4)."""
-    if source_key == "1":          # Recently added to library
+    """Build JS to fetch browse items for Apple Music sources (1–4)."""
+    if source_key == "1":
         return """
         (async function() {
             const mk = MusicKit.getInstance();
@@ -136,7 +168,7 @@ def _build_browse_js(source_key: str, artist: str = "") -> str:
                 }));
         })()
         """
-    elif source_key == "2":        # Related — catalog albums by current artist
+    elif source_key == "2":
         safe = artist.replace("\\", "\\\\").replace("`", "\\`").replace("'", "\\'")
         return f"""
         (async function() {{
@@ -157,7 +189,7 @@ def _build_browse_js(source_key: str, artist: str = "") -> str:
                 }}));
         }})()
         """
-    elif source_key == "3":        # Library albums sorted by date added
+    elif source_key == "3":
         return """
         (async function() {
             const mk = MusicKit.getInstance();
@@ -173,7 +205,7 @@ def _build_browse_js(source_key: str, artist: str = "") -> str:
             }));
         })()
         """
-    else:                          # Mixes — personal playlists from recommendations
+    else:  # "4" — Mixes
         return """
         (async function() {
             const mk = MusicKit.getInstance();
@@ -204,17 +236,26 @@ def _build_browse_js(source_key: str, artist: str = "") -> str:
 # CDP helpers
 # ---------------------------
 
-def _discover_tab() -> dict | None:
-    """Return the first Apple Music tab found via the CDP discovery endpoint."""
+def _discover_tab(host_fragment: str) -> dict | None:
+    """Return the first browser tab whose URL contains host_fragment."""
     try:
         with urllib.request.urlopen(f"{CDP_HOST}/json", timeout=2) as resp:
             tabs = json.loads(resp.read())
         for tab in tabs:
-            if "music.apple.com" in tab.get("url", ""):
+            if host_fragment in tab.get("url", ""):
                 return tab
     except Exception:
         pass
     return None
+
+
+def _load_streams() -> list[dict]:
+    """Load YouTube stream definitions from streams.json."""
+    try:
+        with open(_STREAMS_FILE) as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return []
 
 
 async def _eval(ws, expression: str, msg_id: int, await_promise: bool = False):
@@ -228,8 +269,6 @@ async def _eval(ws, expression: str, msg_id: int, await_promise: bool = False):
             "awaitPromise":  await_promise,
         },
     }))
-    # Drain messages until we see the one matching our id —
-    # the browser may send unsolicited events between sends.
     while True:
         raw = json.loads(await ws.recv())
         if raw.get("id") == msg_id:
@@ -285,10 +324,12 @@ class MusicDoApp(App):
         Binding("space",  "play_pause",  "Play/Pause"),
         Binding("n",      "next_track",  "Next"),
         Binding("p",      "prev_track",  "Prev"),
+        Binding("r",      "restart",     "Restart",  show=False),
         Binding("=",      "vol_up",      "Vol+"),
         Binding("-",      "vol_down",    "Vol-"),
+        Binding("m",      "music_mode",  "Music",    show=False),
         Binding("slash",  "open_search", "Search"),
-        Binding("escape", "close_panel", "Close",  show=False),
+        Binding("escape", "close_panel", "Close",    show=False),
         Binding("q",      "quit",        "Quit"),
     ]
 
@@ -328,6 +369,7 @@ class MusicDoApp(App):
         yield Footer()
 
     async def on_mount(self) -> None:
+        # Apple Music state
         self._ws             = None
         self._msg_id         = 0
         self._lock           = asyncio.Lock()
@@ -336,20 +378,51 @@ class MusicDoApp(App):
         self._browse_cache: dict[str, list] = {}
         self._current_artist = ""
 
+        # YouTube state
+        self._mode       = "music"   # "music" | "youtube"
+        self._ws_yt      = None
+        self._yt_lock    = asyncio.Lock()
+        self._yt_tab_id  = None      # CDP tab id of the YouTube tab
+        self._yt_session = 0         # incremented on each new stream; cancels old poll loop
+        self._yt_volume  = 0.25      # remembered across streams; starts at 25%
+
         self.query_one("#search_panel").display = False
         self.query_one("#search_input", Input).disabled = True
-        self.query_one("#browse_tabs", Static).update(_browse_tab_line("1"))
+        self.query_one("#browse_tabs",  Static).update(_browse_tab_line("1"))
         self.set_focus(None)
         asyncio.create_task(self._connect_loop())
 
-    # ---------------------------
-    # CDP connection + polling
-    # ---------------------------
+    async def on_unmount(self) -> None:
+        """Stop both streams cleanly on quit."""
+        if self._ws_yt:
+            try:
+                async with self._yt_lock:
+                    self._msg_id += 1
+                    await _eval(self._ws_yt,
+                        "(function(){ const v=document.querySelector('video');"
+                        " if(v) v.pause(); })()",
+                        self._msg_id)
+            except Exception:
+                pass
+        if self._ws:
+            try:
+                async with self._lock:
+                    self._msg_id += 1
+                    await _eval(self._ws,
+                        "(function(){ const mk = window.MusicKit && MusicKit.getInstance();"
+                        " if(mk) mk.pause(); })()",
+                        self._msg_id)
+            except Exception:
+                pass
+
+    # ----------------------------------------
+    # Apple Music — CDP connection + polling
+    # ----------------------------------------
 
     async def _connect_loop(self) -> None:
-        """Background loop: find the tab, connect, poll every second, reconnect on drop."""
+        """Background loop: find the AM tab, connect, poll every second."""
         while True:
-            tab = _discover_tab()
+            tab = _discover_tab("music.apple.com")
             if not tab:
                 self._set_status(
                     "No Apple Music tab found — "
@@ -360,21 +433,27 @@ class MusicDoApp(App):
             try:
                 async with websockets.connect(tab["webSocketDebuggerUrl"]) as ws:
                     self._ws = ws
-                    self._set_status("● connected")
+                    if self._mode == "music":
+                        self._set_status("● connected")
                     asyncio.create_task(self._load_browse(self._browse_source))
                     while True:
                         await self._refresh()
                         await asyncio.sleep(1)
             except Exception:
                 self._ws = None
-                self._set_status("● disconnected — retrying...")
+                if self._mode == "music":
+                    self._set_status("● disconnected — retrying...")
                 await asyncio.sleep(3)
 
     async def _refresh(self) -> None:
-        """Poll MusicKit for current state and update the now-playing widgets."""
+        """Poll Apple Music state. Skips display updates when in YouTube mode."""
         async with self._lock:
             self._msg_id += 1
             state = await _eval(self._ws, _STATE_JS, self._msg_id)
+
+        if self._mode == "youtube":
+            # Keep connection alive but don't touch the display
+            return
 
         if not state:
             self.query_one("#track", Static).update(
@@ -424,10 +503,9 @@ class MusicDoApp(App):
         else:
             self.query_one("#queue_list", Static).update("[dim](queue empty)[/dim]")
 
-        # Invalidate the Related cache when the artist changes
-        new_artist = artist  # already extracted above
-        if new_artist and new_artist != "—" and new_artist != self._current_artist:
-            self._current_artist = new_artist
+        # Invalidate Related cache when artist changes
+        if artist and artist != "—" and artist != self._current_artist:
+            self._current_artist = artist
             self._browse_cache.pop("2", None)
             if self._browse_source == "2":
                 asyncio.create_task(self._load_browse("2"))
@@ -435,9 +513,9 @@ class MusicDoApp(App):
     def _set_status(self, msg: str) -> None:
         self.query_one("#status", Static).update(msg)
 
-    # ---------------------------
-    # CDP command helper
-    # ---------------------------
+    # ----------------------------------------
+    # Apple Music — CDP command helper
+    # ----------------------------------------
 
     async def _js(self, expression: str, await_promise: bool = False) -> object:
         if not self._ws:
@@ -446,17 +524,204 @@ class MusicDoApp(App):
             self._msg_id += 1
             return await _eval(self._ws, expression, self._msg_id, await_promise)
 
-    # ---------------------------
+    async def _js_fire(self, expression: str) -> None:
+        """Send a CDP command without waiting for a response.
+
+        Bypasses the poll lock so commands execute immediately even while a
+        poll round-trip is in progress.  The poll loop's _eval discards any
+        response whose id doesn't match what it's waiting for, so stray
+        responses are harmless.
+        """
+        if not self._ws:
+            return
+        self._msg_id += 1
+        await self._ws.send(json.dumps({
+            "id":     self._msg_id,
+            "method": "Runtime.evaluate",
+            "params": {
+                "expression":    expression,
+                "returnByValue": True,
+                "awaitPromise":  False,
+            },
+        }))
+
+    # ----------------------------------------
+    # YouTube — connection + polling
+    # ----------------------------------------
+
+    async def _open_stream(self, url: str) -> None:
+        """Navigate to (or open) a YouTube URL and switch to YouTube mode."""
+        # Stop Apple Music before starting YouTube
+        await self._js("""
+            (function() {
+                const mk = window.MusicKit && MusicKit.getInstance();
+                if (mk) mk.pause();
+            })()
+        """)
+        self._set_status("▶ opening YouTube...")
+
+        # Look for an existing YouTube tab by saved ID first, then by URL scan
+        tab = None
+        if self._yt_tab_id:
+            try:
+                with urllib.request.urlopen(f"{CDP_HOST}/json", timeout=2) as resp:
+                    for t in json.loads(resp.read()):
+                        if t.get("id") == self._yt_tab_id:
+                            tab = t
+                            break
+            except Exception:
+                pass
+        if not tab:
+            tab = _discover_tab("youtube.com")
+
+        if tab:
+            # Navigate existing tab to the new URL
+            self._yt_tab_id = tab["id"]
+            try:
+                async with websockets.connect(
+                    tab["webSocketDebuggerUrl"], open_timeout=5
+                ) as ws:
+                    await ws.send(json.dumps({
+                        "id": 1, "method": "Page.navigate", "params": {"url": url}
+                    }))
+                    await asyncio.sleep(0.3)
+            except Exception:
+                pass
+        else:
+            # Open a brand new tab
+            try:
+                with urllib.request.urlopen(
+                    f"{CDP_HOST}/json/new?{url}", timeout=5
+                ) as resp:
+                    new_tab = json.loads(resp.read())
+                self._yt_tab_id = new_tab.get("id")
+            except Exception as exc:
+                self.notify(f"Could not open YouTube tab: {exc}", severity="error")
+                return
+
+        # Switch mode and start a new poll loop (session counter cancels the old one)
+        self._mode = "youtube"
+        self._yt_session += 1
+        session = self._yt_session
+
+        self._set_status("▶ loading YouTube...")
+        # Give the page time to load before we start polling
+        await asyncio.sleep(4)
+        asyncio.create_task(self._yt_poll_loop(session))
+
+    async def _yt_poll_loop(self, session: int) -> None:
+        """Poll YouTube video state. Exits when mode changes or a new session starts."""
+        while self._mode == "youtube" and self._yt_session == session:
+            tab = None
+            if self._yt_tab_id:
+                try:
+                    with urllib.request.urlopen(f"{CDP_HOST}/json", timeout=2) as resp:
+                        for t in json.loads(resp.read()):
+                            if t.get("id") == self._yt_tab_id:
+                                tab = t
+                                break
+                except Exception:
+                    pass
+
+            if not tab:
+                self._set_status("● youtube — tab not found")
+                await asyncio.sleep(3)
+                continue
+
+            try:
+                async with websockets.connect(tab["webSocketDebuggerUrl"]) as ws:
+                    self._ws_yt = ws
+                    self._set_status("● youtube")
+                    # Restore saved volume before first poll
+                    async with self._yt_lock:
+                        self._msg_id += 1
+                        await _eval(ws,
+                            f"(function(){{ const v=document.querySelector('video');"
+                            f" if(v) v.volume={self._yt_volume:.2f}; }})()",
+                            self._msg_id)
+                    while self._mode == "youtube" and self._yt_session == session:
+                        await self._yt_refresh()
+                        await asyncio.sleep(1)
+            except Exception:
+                self._ws_yt = None
+                if self._mode == "youtube" and self._yt_session == session:
+                    await asyncio.sleep(3)
+
+        self._ws_yt = None
+
+    async def _yt_refresh(self) -> None:
+        """Poll YouTube video element and update the now-playing display."""
+        if not self._ws_yt:
+            return
+
+        async with self._yt_lock:
+            self._msg_id += 1
+            state = await _eval(self._ws_yt, _YT_STATE_JS, self._msg_id)
+
+        if not state:
+            self.query_one("#track", Static).update("[dim]Loading player...[/dim]")
+            for wid in ("#sub", "#progress_bar", "#pb_state", "#vol"):
+                self.query_one(wid, Static).update("")
+            return
+
+        title    = state.get("title",       "—")
+        paused   = state.get("paused",      True)
+        current  = state.get("currentTime", 0)
+        duration = state.get("duration",    0)
+        volume   = state.get("volume",      self._yt_volume)
+        pb_state = "⏸  paused" if paused else "▶  playing"
+
+        try:
+            panel_w = self.query_one("#now_playing").size.width - 16
+        except Exception:
+            panel_w = 40
+        bar      = _progress_bar(current, duration, max(panel_w, 10))
+        time_str = f"{_fmt_time(current)} / {_fmt_time(duration)}"
+        vol_bar  = _volume_bar(volume)
+
+        self.query_one("#track",        Static).update(f"[bold #EDD9A3]{title}[/bold #EDD9A3]")
+        self.query_one("#sub",          Static).update("[dim]YouTube[/dim]")
+        self.query_one("#progress_bar", Static).update(
+            f"[#C9A84C]{bar}[/#C9A84C]  [dim]{time_str}[/dim]"
+        )
+        self.query_one("#pb_state", Static).update(f"[#D4882A]{pb_state}[/#D4882A]")
+        self.query_one("#vol",      Static).update(
+            f"[dim]vol[/dim]  [#7A9E58]{vol_bar}[/#7A9E58]  [dim]{int(volume * 100)}%[/dim]"
+        )
+        self.query_one("#queue_list", Static).update("[dim]— YouTube —[/dim]")
+
+    async def _yt_js(self, expression: str) -> object:
+        """Execute JS in the YouTube tab."""
+        if not self._ws_yt:
+            return None
+        async with self._yt_lock:
+            self._msg_id += 1
+            return await _eval(self._ws_yt, expression, self._msg_id)
+
+    async def _yt_js_fire(self, expression: str) -> None:
+        """Send a CDP command to the YouTube tab without waiting for a response."""
+        if not self._ws_yt:
+            return
+        self._msg_id += 1
+        await self._ws_yt.send(json.dumps({
+            "id":     self._msg_id,
+            "method": "Runtime.evaluate",
+            "params": {
+                "expression":    expression,
+                "returnByValue": True,
+                "awaitPromise":  False,
+            },
+        }))
+
+    # ----------------------------------------
     # Panel management
-    # ---------------------------
+    # ----------------------------------------
 
     def _show_panel(self, panel: str) -> None:
-        """Switch the bottom area between browse and search."""
         self.query_one("#browse_panel").display = (panel == "browse")
         self.query_one("#search_panel").display = (panel == "search")
 
     def action_close_panel(self) -> None:
-        """ESC returns to browse view."""
         inp = self.query_one("#search_input", Input)
         inp.clear()
         inp.disabled = True
@@ -465,55 +730,93 @@ class MusicDoApp(App):
         self._show_panel("browse")
         self.set_focus(None)
 
-    # ---------------------------
-    # Playback actions
-    # ---------------------------
+    # ----------------------------------------
+    # Playback actions — mode-aware
+    # ----------------------------------------
 
     async def action_play_pause(self) -> None:
-        await self._js("""
-            (function() {
-                const mk = MusicKit.getInstance();
-                mk.playbackState === 2 ? mk.pause() : mk.play();
-            })()
-        """)
+        if self._mode == "youtube":
+            await self._yt_js_fire(
+                "(function(){ const v=document.querySelector('video');"
+                " if(v) v.paused ? v.play() : v.pause(); })()"
+            )
+        else:
+            await self._js_fire("""
+                (function() {
+                    const mk = MusicKit.getInstance();
+                    mk.playbackState === 2 ? mk.pause() : mk.play();
+                })()
+            """)
+
+    async def action_restart(self) -> None:
+        """Restart from beginning — YouTube only."""
+        if self._mode != "youtube":
+            return
+        await self._yt_js_fire(
+            "(function(){ const v=document.querySelector('video');"
+            " if(v){ v.currentTime=0; v.play(); } })()"
+        )
 
     async def action_next_track(self) -> None:
-        await self._js("MusicKit.getInstance().skipToNextItem()")
+        if self._mode == "youtube":
+            return
+        await self._js_fire("MusicKit.getInstance().skipToNextItem()")
 
     async def action_prev_track(self) -> None:
-        await self._js("MusicKit.getInstance().skipToPreviousItem()")
+        if self._mode == "youtube":
+            return
+        await self._js_fire("MusicKit.getInstance().skipToPreviousItem()")
 
     async def action_vol_up(self) -> None:
-        await self._js("""
-            (function() {
-                const mk = MusicKit.getInstance();
-                mk.volume = Math.min(1.0, Math.round((mk.volume + 0.05) * 100) / 100);
-            })()
-        """)
+        if self._mode == "youtube":
+            self._yt_volume = round(min(1.0, self._yt_volume + 0.05), 2)
+            await self._yt_js_fire(
+                f"(function(){{ const v=document.querySelector('video');"
+                f" if(v) v.volume={self._yt_volume:.2f}; }})()"
+            )
+        else:
+            await self._js_fire("""
+                (function() {
+                    const mk = MusicKit.getInstance();
+                    mk.volume = Math.min(1.0, Math.round((mk.volume + 0.05) * 100) / 100);
+                })()
+            """)
 
     async def action_vol_down(self) -> None:
-        await self._js("""
-            (function() {
-                const mk = MusicKit.getInstance();
-                mk.volume = Math.max(0.0, Math.round((mk.volume - 0.05) * 100) / 100);
-            })()
-        """)
+        if self._mode == "youtube":
+            self._yt_volume = round(max(0.0, self._yt_volume - 0.05), 2)
+            await self._yt_js_fire(
+                f"(function(){{ const v=document.querySelector('video');"
+                f" if(v) v.volume={self._yt_volume:.2f}; }})()"
+            )
+        else:
+            await self._js_fire("""
+                (function() {
+                    const mk = MusicKit.getInstance();
+                    mk.volume = Math.max(0.0, Math.round((mk.volume - 0.05) * 100) / 100);
+                })()
+            """)
 
-    # ---------------------------
+    # ----------------------------------------
     # Browse
-    # ---------------------------
+    # ----------------------------------------
 
     async def _load_browse(self, source_key: str) -> None:
-        """Fetch browse items for the given source and populate the ListView."""
+        """Populate the browse list for the given source key."""
         self._browse_source = source_key
-        label = _BROWSE_SOURCES[source_key][0]
-
         self.query_one("#browse_tabs", Static).update(
             _browse_tab_line(source_key, self._current_artist)
         )
 
+        # Source 5: YouTube streams from local file — no JS call needed
+        if source_key == "5":
+            self._populate_yt_browse()
+            return
+
+        # Cache hit for Apple Music sources
         if source_key in self._browse_cache:
             self._populate_browse(self._browse_cache[source_key])
+            self.query_one("#browse_results", ListView).focus()
             return
 
         if source_key == "2" and not self._current_artist:
@@ -524,8 +827,11 @@ class MusicDoApp(App):
 
         lv = self.query_one("#browse_results", ListView)
         lv.clear()
-        loading_label = f"loading {label}..." if source_key != "2" \
-            else f"loading related: {self._current_artist}..."
+        loading_label = (
+            f"loading related: {self._current_artist}..."
+            if source_key == "2"
+            else f"loading {_BROWSE_SOURCES[source_key][0]}..."
+        )
         lv.append(ListItem(Label(f"[dim]{loading_label}[/dim]", markup=True)))
 
         self._set_status(loading_label)
@@ -533,7 +839,7 @@ class MusicDoApp(App):
             _build_browse_js(source_key, self._current_artist),
             await_promise=True,
         )
-        self._set_status("● connected")
+        self._set_status("● connected" if self._mode == "music" else "● youtube")
 
         if not results:
             lv.clear()
@@ -542,8 +848,10 @@ class MusicDoApp(App):
 
         self._browse_cache[source_key] = results
         self._populate_browse(results)
+        self.query_one("#browse_results", ListView).focus()
 
     def _populate_browse(self, items: list) -> None:
+        """Populate browse list with Apple Music items."""
         lv = self.query_one("#browse_results", ListView)
         lv.clear()
         for item in items:
@@ -560,18 +868,56 @@ class MusicDoApp(App):
             li._item_kind = item["kind"]
             lv.append(li)
 
+    def _populate_yt_browse(self) -> None:
+        """Populate browse list with YouTube streams from streams.json."""
+        lv = self.query_one("#browse_results", ListView)
+        lv.clear()
+        streams = _load_streams()
+        if not streams:
+            lv.append(ListItem(Label(
+                "[dim]No streams — add entries to streams.json[/dim]", markup=True
+            )))
+            return
+        for stream in streams:
+            title = stream.get("title", "—")
+            li = ListItem(Label(
+                f"[bold #EDD9A3]{title}[/bold #EDD9A3]",
+                markup=True,
+            ))
+            li._item_id   = stream.get("url", "")
+            li._item_kind = "youtube"
+            lv.append(li)
+        lv.focus()
+
+    def action_music_mode(self) -> None:
+        """Pause YouTube and switch display back to Apple Music."""
+        asyncio.create_task(self._pause_yt_and_switch())
+
+    async def _pause_yt_and_switch(self) -> None:
+        await self._yt_js(
+            "(function(){ const v=document.querySelector('video'); if(v) v.pause(); })()"
+        )
+        self._mode = "music"
+        self._set_status("● connected" if self._ws else "● disconnected — retrying...")
+
     async def on_key(self, event) -> None:
-        """Handle source-switching keys 1–4."""
+        """Handle source-switching keys 1–5."""
         if event.key in _BROWSE_SOURCES:
             event.stop()
             if self._search_mode:
                 self._show_panel("browse")
                 self._search_mode = False
+            # Browsing sources 1–4 snaps display back to music mode
+            if event.key != "5" and self._mode == "youtube":
+                await self._yt_js(
+                    "(function(){ const v=document.querySelector('video'); if(v) v.pause(); })()"
+                )
+                self._mode = "music"
             await self._load_browse(event.key)
 
-    # ---------------------------
-    # Search
-    # ---------------------------
+    # ----------------------------------------
+    # Search (Apple Music only)
+    # ----------------------------------------
 
     def action_open_search(self) -> None:
         if self._search_mode:
@@ -620,9 +966,9 @@ class MusicDoApp(App):
             lv.append(li)
         lv.focus()
 
-    # ---------------------------
+    # ----------------------------------------
     # Play selected item
-    # ---------------------------
+    # ----------------------------------------
 
     async def on_list_view_selected(self, event: ListView.Selected) -> None:
         if event.list_view.id not in ("search_results", "browse_results"):
@@ -632,6 +978,17 @@ class MusicDoApp(App):
         if not item_id:
             return
 
+        if item_kind == "youtube":
+            await self._open_stream(item_id)
+            self.action_close_panel()
+            return
+
+        # Apple Music selection — switch back to music mode if needed
+        self._mode = "music"
+        self._set_status("● connected")
+        self.query_one("#queue_header", Static).update(
+            "[bold #C9A84C]Queue[/bold #C9A84C]"
+        )
         await self._js(f"""
             (async function() {{
                 const mk = MusicKit.getInstance();
