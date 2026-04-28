@@ -384,7 +384,7 @@ class MusicDoApp(App):
         self._yt_lock    = asyncio.Lock()
         self._yt_tab_id  = None      # CDP tab id of the YouTube tab
         self._yt_session = 0         # incremented on each new stream; cancels old poll loop
-        self._yt_volume  = 0.25      # remembered across streams; starts at 25%
+        self._yt_volume  = 1.0       # tracks browser volume; synced on each poll
 
         self.query_one("#search_panel").display = False
         self.query_one("#search_input", Input).disabled = True
@@ -632,13 +632,6 @@ class MusicDoApp(App):
                 async with websockets.connect(tab["webSocketDebuggerUrl"]) as ws:
                     self._ws_yt = ws
                     self._set_status("● youtube")
-                    # Restore saved volume before first poll
-                    async with self._yt_lock:
-                        self._msg_id += 1
-                        await _eval(ws,
-                            f"(function(){{ const v=document.querySelector('video');"
-                            f" if(v) v.volume={self._yt_volume:.2f}; }})()",
-                            self._msg_id)
                     while self._mode == "youtube" and self._yt_session == session:
                         await self._yt_refresh()
                         await asyncio.sleep(1)
@@ -669,6 +662,7 @@ class MusicDoApp(App):
         current  = state.get("currentTime", 0)
         duration = state.get("duration",    0)
         volume   = state.get("volume",      self._yt_volume)
+        self._yt_volume = volume
         pb_state = "⏸  paused" if paused else "▶  playing"
 
         try:

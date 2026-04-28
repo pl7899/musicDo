@@ -1,14 +1,19 @@
 [
     {
         "title": "Mega Man Jazz",
-        "url": "https://www.youtube.com/watch?v=jqOXHkZ6a80"
+        "url": "https://www.youtube.com/watch?v=jqOXHkZ6a80&t=0s"
     },
     {
         "title": "SEGA CD",
-        "url": "https://www.youtube.com/watch?v=FtBe2xQwk8g"
+        "url": "https://www.youtube.com/watch?v=FtBe2xQwk8g&t=0s"
     },
     {
         "title": "Star Fpx 64 Bossa Nova Remix",
-        "url": "https://www.youtube.com/watch?v=pyu6Ef1bl4g"
+        "url": "https://www.youtube.com/watch?v=pyu6Ef1bl4g&t=0s"
+    },
+    {
+      "title": "KONG Primal Progressions",
+      "url": "https://www.youtube.com/watch?v=_uELPy6Msao&t=0s"
     }
+
 ]
