@@ -306,7 +306,7 @@ def _browse_tab_line(active: str, related_artist: str = "") -> str:
             short = related_artist[:20] + "…" if len(related_artist) > 20 else related_artist
             display = f"Related: {short}"
         if key == active:
-            parts.append(f"[bold #C4622D]{key} {display}[/bold #C4622D]")
+            parts.append(f"[bold #fb4934]{key} {display}[/bold #fb4934]")
         else:
             parts.append(f"[dim]{key} {display}[/dim]")
     return "  ".join(parts)
@@ -353,7 +353,7 @@ class MusicDoApp(App):
 
                 with Vertical(id="queue_panel"):
                     yield Static(
-                        "[bold #C9A84C]Queue[/bold #C9A84C]",
+                        "[bold #fabd2f]Queue[/bold #fabd2f]",
                         id="queue_header", markup=True,
                     )
                     yield Static("", id="queue_list", markup=True)
@@ -479,14 +479,14 @@ class MusicDoApp(App):
         time_str = f"{_fmt_time(current)} / {_fmt_time(duration)}"
         vol_bar  = _volume_bar(volume)
 
-        self.query_one("#track",        Static).update(f"[bold #EDD9A3]{title}[/bold #EDD9A3]")
+        self.query_one("#track",        Static).update(f"[bold #ebdbb2]{title}[/bold #ebdbb2]")
         self.query_one("#sub",          Static).update(f"[dim]{artist}  ·  {album}[/dim]")
         self.query_one("#progress_bar", Static).update(
-            f"[#C9A84C]{bar}[/#C9A84C]  [dim]{time_str}[/dim]"
+            f"[#fabd2f]{bar}[/#fabd2f]  [dim]{time_str}[/dim]"
         )
-        self.query_one("#pb_state", Static).update(f"[#D4882A]{pb_state}[/#D4882A]")
+        self.query_one("#pb_state", Static).update(f"[#fe8019]{pb_state}[/#fe8019]")
         self.query_one("#vol",      Static).update(
-            f"[dim]vol[/dim]  [#7A9E58]{vol_bar}[/#7A9E58]  [dim]{int(volume * 100)}%[/dim]"
+            f"[dim]vol[/dim]  [#b8bb26]{vol_bar}[/#b8bb26]  [dim]{int(volume * 100)}%[/dim]"
         )
 
         queue = state.get("queue", [])
@@ -496,8 +496,8 @@ class MusicDoApp(App):
                 t          = item.get("title",     "—")
                 a          = item.get("artist",    "")
                 is_current = item.get("isCurrent", False)
-                marker = "[#C9A84C]▸[/#C9A84C]" if is_current else " "
-                a_part = f"  [dim #8A7355]{a}[/dim #8A7355]" if a else ""
+                marker = "[#fabd2f]▸[/#fabd2f]" if is_current else " "
+                a_part = f"  [dim #a89984]{a}[/dim #a89984]" if a else ""
                 lines.append(f"{marker} [dim]{t}[/dim]{a_part}")
             self.query_one("#queue_list", Static).update("\n".join(lines))
         else:
@@ -679,14 +679,14 @@ class MusicDoApp(App):
         time_str = f"{_fmt_time(current)} / {_fmt_time(duration)}"
         vol_bar  = _volume_bar(volume)
 
-        self.query_one("#track",        Static).update(f"[bold #EDD9A3]{title}[/bold #EDD9A3]")
+        self.query_one("#track",        Static).update(f"[bold #ebdbb2]{title}[/bold #ebdbb2]")
         self.query_one("#sub",          Static).update("[dim]YouTube[/dim]")
         self.query_one("#progress_bar", Static).update(
-            f"[#C9A84C]{bar}[/#C9A84C]  [dim]{time_str}[/dim]"
+            f"[#fabd2f]{bar}[/#fabd2f]  [dim]{time_str}[/dim]"
         )
-        self.query_one("#pb_state", Static).update(f"[#D4882A]{pb_state}[/#D4882A]")
+        self.query_one("#pb_state", Static).update(f"[#fe8019]{pb_state}[/#fe8019]")
         self.query_one("#vol",      Static).update(
-            f"[dim]vol[/dim]  [#7A9E58]{vol_bar}[/#7A9E58]  [dim]{int(volume * 100)}%[/dim]"
+            f"[dim]vol[/dim]  [#b8bb26]{vol_bar}[/#b8bb26]  [dim]{int(volume * 100)}%[/dim]"
         )
         self.query_one("#queue_list", Static).update("[dim]— YouTube —[/dim]")
 
@@ -859,9 +859,9 @@ class MusicDoApp(App):
             artist = item.get("artist", "")
             extra  = item.get("extra",  "")
             a_part = f"  [dim]{artist}[/dim]" if artist else ""
-            e_part = f"  [dim #8A7355]{extra}[/dim #8A7355]" if extra else ""
+            e_part = f"  [dim #a89984]{extra}[/dim #a89984]" if extra else ""
             li = ListItem(Label(
-                f"[bold #EDD9A3]{title}[/bold #EDD9A3]{a_part}{e_part}",
+                f"[bold #ebdbb2]{title}[/bold #ebdbb2]{a_part}{e_part}",
                 markup=True,
             ))
             li._item_id   = item["id"]
@@ -881,7 +881,7 @@ class MusicDoApp(App):
         for stream in streams:
             title = stream.get("title", "—")
             li = ListItem(Label(
-                f"[bold #EDD9A3]{title}[/bold #EDD9A3]",
+                f"[bold #ebdbb2]{title}[/bold #ebdbb2]",
                 markup=True,
             ))
             li._item_id   = stream.get("url", "")
@@ -953,11 +953,11 @@ class MusicDoApp(App):
             title  = item.get("title",  "—")
             artist = item.get("artist", "")
             extra  = item.get("extra",  "")
-            prefix = "[dim #7A9E58]album[/dim #7A9E58]" if kind == "album" \
-                else "[dim #C4622D] song[/dim #C4622D]"
+            prefix = "[dim #b8bb26]album[/dim #b8bb26]" if kind == "album" \
+                else "[dim #fb4934] song[/dim #fb4934]"
             e_part = f"  [dim]{extra}[/dim]" if extra else ""
             li = ListItem(Label(
-                f"{prefix}  [bold #EDD9A3]{title}[/bold #EDD9A3]"
+                f"{prefix}  [bold #ebdbb2]{title}[/bold #ebdbb2]"
                 f"  [dim]{artist}[/dim]{e_part}",
                 markup=True,
             ))
@@ -987,7 +987,7 @@ class MusicDoApp(App):
         self._mode = "music"
         self._set_status("● connected")
         self.query_one("#queue_header", Static).update(
-            "[bold #C9A84C]Queue[/bold #C9A84C]"
+            "[bold #fabd2f]Queue[/bold #fabd2f]"
         )
         await self._js(f"""
             (async function() {{
